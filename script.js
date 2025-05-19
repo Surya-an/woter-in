@@ -1,0 +1,226 @@
+
+  (function(){
+    const STORAGE_KEY = 'waterIntakeTrackerData';
+
+    const defaultDailyGoal = 2; // liters
+    const cupVolume = 0.25; // liters per cup
+
+    const dailyGoalInput = document.getElementById('dailyGoalInput');
+    const cupsContainer = document.getElementById('cupsContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const remainingText = document.getElementById('remainingText');
+    const historyBody = document.getElementById('historyBody');
+
+    // State stored as object of daily records keyed by yyyy-mm-dd string
+    // Each record: { dailyGoal: number, cupsFilled: array of booleans }
+    let historyData = {};
+
+    let currentDate = getTodayDateString();
+    let dailyGoal = defaultDailyGoal;
+    let cupsFilled = [];
+
+    function getTodayDateString() {
+      // format YYYY-MM-DD for consistent keying
+      let now = new Date();
+      let y = now.getFullYear();
+      let m = (now.getMonth() +1).toString().padStart(2,'0');
+      let d = now.getDate().toString().padStart(2,'0');
+      return `${y}-${m}-${d}`;
+    }
+
+    // Calculate how many cups needed for a given goal
+    function cupsCountForGoal(goal) {
+      return Math.ceil(goal / cupVolume);
+    }
+
+    // Load all historyData from localStorage
+    function loadHistoryData() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if(raw) {
+        try {
+          historyData = JSON.parse(raw);
+          if(typeof historyData !== 'object' || historyData === null) {
+            historyData = {};
+          }
+        } catch(e) {
+          historyData = {};
+        }
+      }
+    }
+
+    // Save current historyData to localStorage
+    function saveHistoryData() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(historyData));
+    }
+
+    // Load the daily data for the current date and initialize state
+    function loadTodayData() {
+      if(historyData[currentDate]) {
+        dailyGoal = historyData[currentDate].dailyGoal || defaultDailyGoal;
+        cupsFilled = historyData[currentDate].cupsFilled || [];
+        // Adjust cupsFilled length and pad false if needed
+        let needed = cupsCountForGoal(dailyGoal);
+        if(cupsFilled.length > needed) {
+          cupsFilled = cupsFilled.slice(0, needed);
+        } else {
+          while(cupsFilled.length < needed) {
+            cupsFilled.push(false);
+          }
+        }
+      } else {
+        dailyGoal = defaultDailyGoal;
+        cupsFilled = new Array(cupsCountForGoal(dailyGoal)).fill(false);
+      }
+      dailyGoalInput.value = dailyGoal.toFixed(2);
+    }
+
+    // Save current day's data to historyData and localStorage
+    function saveTodayData() {
+      historyData[currentDate] = {
+        dailyGoal,
+        cupsFilled
+      };
+      saveHistoryData();
+    }
+
+    // Render cups buttons
+    function renderCups() {
+      cupsContainer.innerHTML = '';
+      const count = cupsCountForGoal(dailyGoal);
+      for(let i=0; i<count; i++){
+        const cup = document.createElement('button');
+        cup.type = 'button';
+        cup.className = 'cup';
+        cup.setAttribute('aria-pressed', cupsFilled[i] ? 'true' : 'false');
+        cup.setAttribute('aria-label', `Cup ${i+1} of ${count}, ${cupVolume} liters`);
+        if(cupsFilled[i]) {
+          cup.classList.add('filled');
+        }
+        cup.dataset.index = i;
+        cup.title = `Toggle cup ${i+1} (${cupVolume} L)`;
+        cup.addEventListener('click', () => {
+          const index = Number(cup.dataset.index);
+          if(cupsFilled[index] && (index === cupsFilled.length - 1 || !cupsFilled[index + 1])) {
+            // unfill from index onwards
+            for(let j=index; j< cupsFilled.length; j++) {
+              cupsFilled[j] = false;
+            }
+          } else {
+            // fill from 0 up to index
+            for(let j=0; j < cupsFilled.length; j++) {
+              cupsFilled[j] = j <= index;
+            }
+          }
+          saveTodayData();
+          renderCups();
+          updateProgress();
+          renderHistoryTable();
+        });
+        cupsContainer.appendChild(cup);
+      }
+    }
+
+    // Update progress bar and text
+    function updateProgress() {
+      const filledCount = cupsFilled.filter(c => c).length;
+      const totalCount = cupsCountForGoal(dailyGoal);
+      const consumedLiters = (filledCount * cupVolume).toFixed(2);
+      const goalLiters = dailyGoal.toFixed(2);
+
+      let percent = (filledCount / totalCount) * 100;
+      progressBar.style.width = percent + '%';
+
+      progressText.textContent = `You have consumed ${consumedLiters} L of water today.`;
+      let remainingLiters = dailyGoal - (filledCount * cupVolume);
+      if(remainingLiters < 0) remainingLiters = 0;
+      remainingText.textContent = `Remaining: ${remainingLiters.toFixed(2)} L`;
+    }
+
+    // Handle daily goal changes
+    function onDailyGoalChange() {
+      let val = parseFloat(dailyGoalInput.value);
+      if(isNaN(val) || val < cupVolume) {
+        val = defaultDailyGoal;
+        dailyGoalInput.value = val.toFixed(2);
+      }
+      dailyGoal = val;
+
+      // Resize cupsFilled array accordingly
+      const newCount = cupsCountForGoal(dailyGoal);
+      if(newCount > cupsFilled.length) {
+        for(let i=cupsFilled.length; i < newCount; i++) {
+          cupsFilled[i] = false;
+        }
+      } else if(newCount < cupsFilled.length) {
+        cupsFilled = cupsFilled.slice(0, newCount);
+      }
+
+      saveTodayData();
+      renderCups();
+      updateProgress();
+      renderHistoryTable();
+    }
+
+    // Render the history table showing all days sorted descending
+    function renderHistoryTable() {
+      historyBody.innerHTML = '';
+      const dates = Object.keys(historyData)
+        .sort((a,b) => b.localeCompare(a));
+      if(dates.length === 0) {
+        const tr = document.createElement('tr');
+        const td = document.createElement('td');
+        td.colSpan = 4;
+        td.style.fontStyle = 'italic';
+        td.textContent = 'No history available';
+        tr.appendChild(td);
+        historyBody.appendChild(tr);
+        return;
+      }
+      for(let date of dates) {
+        const record = historyData[date];
+        const dailyGoalValue = record.dailyGoal || defaultDailyGoal;
+        const cups = record.cupsFilled || [];
+        const cupsCount = cups.length;
+        const filledCount = cups.filter(c => c).length;
+        const liters = (filledCount * cupVolume).toFixed(2);
+
+        const tr = document.createElement('tr');
+        const tdDate = document.createElement('td');
+        tdDate.textContent = date;
+        const tdCups = document.createElement('td');
+        tdCups.textContent = `${filledCount} / ${cupsCount}`;
+        const tdLiters = document.createElement('td');
+        tdLiters.textContent = liters;
+        const tdGoal = document.createElement('td');
+        tdGoal.textContent = dailyGoalValue.toFixed(2);
+
+        tr.appendChild(tdDate);
+        tr.appendChild(tdCups);
+        tr.appendChild(tdLiters);
+        tr.appendChild(tdGoal);
+        historyBody.appendChild(tr);
+      }
+    }
+
+    function init() {
+      loadHistoryData();
+      currentDate = getTodayDateString();
+      loadTodayData();
+      renderCups();
+      updateProgress();
+      renderHistoryTable();
+    }
+
+    dailyGoalInput.addEventListener('change', onDailyGoalChange);
+    dailyGoalInput.addEventListener('input', () => {
+      if(dailyGoalInput.value !== '') {
+        let v = parseFloat(dailyGoalInput.value);
+        if(v < cupVolume) {
+          dailyGoalInput.value = cupVolume.toFixed(2);
+        }
+      }
+    });
+
+    init();
+  })();
